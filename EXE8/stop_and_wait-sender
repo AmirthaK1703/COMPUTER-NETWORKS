@@ -1,0 +1,93 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8080
+#define MAX 50
+
+struct Packet
+{
+    int seqnum;
+    char data[MAX];
+};
+
+int main()
+{
+    int sock;
+    struct sockaddr_in server_addr;
+
+    struct Packet packet;
+    int total;
+    int ack;
+    int i;
+
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (sock < 0)
+    {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    if (connect(sock, (struct sockaddr *)&server_addr,
+                sizeof(server_addr)) < 0)
+    {
+        perror("Connection failed");
+        close(sock);
+        return 1;
+    }
+
+    printf("Connected to receiver.\n");
+
+    printf("Enter number of frames: ");
+    scanf("%d", &total);
+
+    for (i = 0; i < total; i++)
+    {
+        packet.seqnum = i;
+
+        printf("Enter data for frame %d: ", i);
+        scanf("%s", packet.data);
+
+        /* Send one frame */
+        send(sock, &packet, sizeof(packet), 0);
+
+        printf("\nFrame %d sent\n", packet.seqnum);
+
+        /* Wait for ACK */
+        if (recv(sock, &ack, sizeof(ack), 0) <= 0)
+        {
+            printf("Receiver disconnected.\n");
+            break;
+        }
+
+        if (ack == packet.seqnum)
+        {
+            printf("ACK %d received\n", ack);
+            printf("Sending next frame...\n");
+        }
+        else
+        {
+            printf("Wrong ACK received.\n");
+            printf("Expected ACK: %d\n", packet.seqnum);
+
+            /*
+             * Retransmission can be done here
+             * in a timeout-based implementation.
+             */
+        }
+    }
+
+    printf("\nAll frames transmitted.\n");
+
+    close(sock);
+
+    return 0;
+}

@@ -1,0 +1,33 @@
+/**
+ * Note: The returned array must be malloced, assume caller calls free().
+ */
+int* maxSlidingWindow(int* nums, int numsSize, int k, int* returnSize) {
+    
+    *returnSize = numsSize - k + 1;
+
+    int *result = malloc((*returnSize) * sizeof(int));
+    int *deque = malloc(numsSize * sizeof(int));
+
+    int front = 0, rear = 0;
+
+    for (int i = 0; i < numsSize; i++) {
+        // Remove indices outside the current window
+        while (front < rear && deque[front] <= i - k)
+            front++;
+
+        // Remove smaller elements from the back
+        while (front < rear && nums[deque[rear - 1]] <= nums[i])
+            rear--;
+
+        deque[rear++] = i;
+
+        // Record maximum once the first window is complete
+        if (i >= k - 1)
+            result[i - k + 1] = nums[deque[front]];
+    }
+
+    free(deque);
+    return result;
+
+    
+}

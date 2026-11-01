@@ -1,0 +1,109 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8062
+#define MAX 50
+#define WINDOW_SIZE 4
+
+struct Frame {
+    int seqnum;
+    char data[MAX];
+};
+
+struct Packet {
+    int seqnum;
+    char data[MAX];
+    int acknum;
+};
+
+int main() {
+    int sock;
+    struct sockaddr_in server_addr;
+    struct Frame frames[20];
+    struct Packet packet;
+    int total, i;
+    int base = 0;
+    int nextseq = 0;
+    int ack;
+
+    // Variables for error simulation
+    int drop_frame;
+    int drop_simulated = 0;
+
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection failed");
+        close(sock);
+        return 1;
+    }
+
+    printf("Connected to receiver.\n");
+
+    printf("Enter number of frames: ");
+    scanf("%d", &total);
+
+    for (i = 0; i < total; i++) {
+        frames[i].seqnum = i;
+        printf("Enter data for frame %d: ", i);
+        scanf("%s", frames[i].data);
+    }
+
+    // Ask user which frame to drop to create the error condition
+    printf("\nEnter frame number to simulate loss (e.g., 2, or -1 for none): ");
+    scanf("%d", &drop_frame);
+
+    while (base < total) {
+        /* Send frames within the window */
+        while (nextseq < base + WINDOW_SIZE && nextseq < total) {
+            packet.seqnum = frames[nextseq].seqnum;
+            strcpy(packet.data, frames[nextseq].data);
+            packet.acknum = -1;
+
+            // ERROR CONDITION: Intentionally skip sending the selected frame once
+            if (nextseq == drop_frame && !drop_simulated) {
+                printf("\n[SIMULATED ERROR] Dropping frame %d completely!\n", nextseq);
+                drop_simulated = 1;
+                nextseq++; // Advance sequence number without sending
+                continue;
+            }
+
+            send(sock, &packet, sizeof(packet), 0);
+            printf("Sent frame %d\n", nextseq);
+            nextseq++;
+        }
+
+        /* Receive ACK */
+        if (recv(sock, &ack, sizeof(ack), 0) <= 0) {
+            printf("Receiver disconnected.\n");
+            break;
+        }
+
+        printf("Received ACK %d\n", ack);
+
+        if (ack >= base) {
+            // Sliding the window forward
+            base = ack + 1;
+        } else {
+            // Duplicate or old ACK indicates the receiver is missing a frame
+            printf("Duplicate/old ACK received! Rolling back nextseq to base %d\n", base);
+            nextseq = base; // Go-Back-N rollback
+        }
+    }
+
+    printf("\nAll frames transmitted successfully.\n");
+    close(sock);
+    return 0;
+}

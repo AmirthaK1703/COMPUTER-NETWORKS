@@ -1,0 +1,97 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+struct Request {
+    float num1;
+    float num2;
+    char op;
+};
+
+int main()
+{
+    int sockfd;
+    struct sockaddr_in server, client;
+    socklen_t len = sizeof(client);
+
+    struct Request req;
+    float result;
+    char response[100];
+
+    // Create UDP socket
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    // Server address
+    server.sin_family = AF_INET;
+    server.sin_port = htons(8022);
+    server.sin_addr.s_addr = INADDR_ANY;
+
+    // Bind socket
+    if (bind(sockfd, (struct sockaddr *)&server, sizeof(server)) < 0)
+    {
+        perror("Bind failed");
+        close(sockfd);
+        exit(1);
+    }
+
+    printf("UDP RCP Server is running...\n");
+
+    // Iterative server: handle one request at a time
+    while (1)
+    {
+        recvfrom(sockfd, &req, sizeof(req), 0,
+                 (struct sockaddr *)&client, &len);
+
+        printf("\nReceived: %.2f %c %.2f\n",
+               req.num1, req.op, req.num2);
+
+        switch (req.op)
+        {
+            case '+':
+                result = req.num1 + req.num2;
+                sprintf(response, "Result = %.2f", result);
+                break;
+
+            case '-':
+                result = req.num1 - req.num2;
+                sprintf(response, "Result = %.2f", result);
+                break;
+
+            case '*':
+                result = req.num1 * req.num2;
+                sprintf(response, "Result = %.2f", result);
+                break;
+
+            case '/':
+                if (req.num2 == 0)
+                {
+                    strcpy(response, "Error: Division by zero");
+                }
+                else
+                {
+                    result = req.num1 / req.num2;
+                    sprintf(response, "Result = %.2f", result);
+                }
+                break;
+
+            default:
+                strcpy(response, "Error: Invalid operator");
+        }
+
+        sendto(sockfd, response, strlen(response) + 1, 0,
+               (struct sockaddr *)&client, len);
+
+        printf("Response sent: %s\n", response);
+    }
+
+    close(sockfd);
+    return 0;
+}

@@ -1,0 +1,75 @@
+#include <stdio.h>
+
+int main() {
+    int n, window, lostFrame;
+    int base = 0, transmissions = 0;
+    int lossOccurred = 0;
+
+    printf("Enter number of frames: ");
+    scanf("%d", &n);
+
+    printf("Enter window size: ");
+    scanf("%d", &window);
+
+    printf("Enter frame number to lose (0 for no loss): ");
+    scanf("%d", &lostFrame);
+
+    if (n <= 0 || window <= 0 || window > n ||
+        lostFrame < 0 || lostFrame > n) {
+        printf("Invalid input!\n");
+        return 1;
+    }
+
+    printf("\n--- Go-Back-N ARQ Simulation ---\n");
+
+    while (base < n) {
+        int end = base + window;
+        if (end > n)
+            end = n;
+
+        printf("\nSender window: Frames %d to %d\n",
+               base + 1, end);
+
+        int frameLost = -1;
+
+        /* Transmit all frames in the current window */
+        for (int i = base; i < end; i++) {
+            printf("Sender: Transmitting Frame %d\n", i + 1);
+            transmissions++;
+
+            if (i + 1 == lostFrame && !lossOccurred) {
+                printf("Receiver: Frame %d lost!\n", i + 1);
+                lossOccurred = 1;
+                frameLost = i;
+            } else if (frameLost == -1) {
+                printf("Receiver: Frame %d received\n", i + 1);
+                printf("Receiver: ACK %d sent\n", i + 1);
+            } else {
+                printf("Receiver: Frame %d discarded "
+                       "(out of order)\n", i + 1);
+                printf("Receiver: Duplicate ACK %d sent\n",
+                       frameLost);
+            }
+        }
+
+        if (frameLost != -1) {
+            printf("\nTimeout for Frame %d!\n", frameLost + 1);
+            printf("Sender: Retransmitting from Frame %d\n",
+                   frameLost + 1);
+
+            /* Go-Back-N retransmission */
+            base = frameLost;
+        } else {
+            base = end;
+        }
+    }
+
+    printf("\n--- Transmission Summary ---\n");
+    printf("Total frames: %d\n", n);
+    printf("Window size: %d\n", window);
+    printf("Total transmissions: %d\n", transmissions);
+    printf("Retransmissions: %d\n", transmissions - n);
+    printf("All frames delivered successfully!\n");
+
+    return 0;
+}

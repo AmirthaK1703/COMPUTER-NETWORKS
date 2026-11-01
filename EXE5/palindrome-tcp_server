@@ -1,0 +1,88 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8080
+#define BUFFER_SIZE 1024
+
+int isPalindrome(char str[]) {
+    int left = 0;
+    int right = strlen(str) - 1;
+
+    while (left < right) {
+        if (str[left] != str[right])
+            return 0;
+
+        left++;
+        right--;
+    }
+
+    return 1;
+}
+
+int main() {
+    int server_fd, client_fd;
+    struct sockaddr_in server_addr;
+    char buffer[BUFFER_SIZE];
+
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (server_fd < 0) {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+
+    if (bind(server_fd, (struct sockaddr *)&server_addr,
+             sizeof(server_addr)) < 0) {
+        perror("Bind failed");
+        close(server_fd);
+        exit(1);
+    }
+
+    if (listen(server_fd, 5) < 0) {
+        perror("Listen failed");
+        close(server_fd);
+        exit(1);
+    }
+
+    printf("Palindrome server listening on port %d...\n", PORT);
+
+    while (1) {
+        client_fd = accept(server_fd, NULL, NULL);
+
+        if (client_fd < 0) {
+            perror("Accept failed");
+            continue;
+        }
+
+        memset(buffer, 0, sizeof(buffer));
+
+        int n = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
+
+        if (n > 0) {
+            buffer[n] = '\0';
+
+            // Remove trailing newline
+            buffer[strcspn(buffer, "\r\n")] = '\0';
+
+            printf("Received: %s\n", buffer);
+
+            if (isPalindrome(buffer))
+                send(client_fd, "Palindrome", 10, 0);
+            else
+                send(client_fd, "Not a palindrome", 16, 0);
+        }
+
+        close(client_fd);
+    }
+
+    close(server_fd);
+    return 0;
+}

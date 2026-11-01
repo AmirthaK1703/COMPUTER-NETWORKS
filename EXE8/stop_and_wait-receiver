@@ -1,0 +1,109 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8080
+#define MAX 50
+
+struct Packet
+{
+    int seqnum;
+    char data[MAX];
+};
+
+int main()
+{
+    int server_sock, client_sock;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addr_size;
+
+    struct Packet packet;
+
+    int expected = 0;
+    int ack;
+    int n;
+
+    server_sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (server_sock < 0)
+    {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+
+    if (bind(server_sock, (struct sockaddr *)&server_addr,
+             sizeof(server_addr)) < 0)
+    {
+        perror("Bind failed");
+        close(server_sock);
+        return 1;
+    }
+
+    listen(server_sock, 5);
+
+    printf("Waiting for sender...\n");
+
+    addr_size = sizeof(client_addr);
+
+    client_sock = accept(server_sock,
+                         (struct sockaddr *)&client_addr,
+                         &addr_size);
+
+    if (client_sock < 0)
+    {
+        perror("Accept failed");
+        close(server_sock);
+        return 1;
+    }
+
+    printf("Sender connected.\n");
+
+    while (1)
+    {
+        n = recv(client_sock, &packet, sizeof(packet), 0);
+
+        if (n <= 0)
+            break;
+
+        printf("\nReceived frame %d\n", packet.seqnum);
+
+        if (packet.seqnum == expected)
+        {
+            printf("Data received: %s\n", packet.data);
+
+            ack = packet.seqnum;
+
+            send(client_sock, &ack, sizeof(ack), 0);
+
+            printf("ACK %d sent\n", ack);
+
+            expected++;
+        }
+        else
+        {
+            printf("Unexpected frame received.\n");
+
+            /*
+             * Send ACK for the previous
+             * correctly received frame.
+             */
+            ack = expected - 1;
+
+            send(client_sock, &ack, sizeof(ack), 0);
+
+            printf("ACK %d sent again\n", ack);
+        }
+    }
+
+    close(client_sock);
+    close(server_sock);
+
+    return 0;
+}

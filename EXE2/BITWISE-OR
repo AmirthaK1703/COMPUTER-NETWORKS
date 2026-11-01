@@ -1,0 +1,29 @@
+class Solution {
+public:
+    int subarrayBitwiseORs(vector<int>& arr) {
+
+        std::vector<int> unique_ors; 
+        
+        int left_boundary = 0; 
+        
+        for (const int current_num : arr) {
+            int right_boundary = unique_ors.size();
+            
+            unique_ors.push_back(current_num);
+            
+            for (int i = left_boundary; i < right_boundary; ++i) {
+                int new_or_val = unique_ors[i] | current_num;
+                
+                if (unique_ors.back() != new_or_val) {
+                    unique_ors.push_back(new_or_val);
+                }
+            }
+            
+            left_boundary = right_boundary;
+        }
+        
+        std::unordered_set<int> total_distinct(unique_ors.begin(), unique_ors.end());
+        return total_distinct.size();
+    }
+};
+  

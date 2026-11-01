@@ -1,0 +1,378 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <pthread.h>
+
+#define PORT 8033
+#define MAX 1024
+#define MAX_SUBNETS 10
+
+struct Subnet
+{
+    unsigned int network;
+    int prefix;
+    int total_hosts;
+    int allocated;
+};
+
+struct ClientInfo
+{
+    int sockfd;
+    struct sockaddr_in client;
+    char message[MAX];
+};
+
+/* Convert IP address to unsigned integer */
+unsigned int ipToInt(int a, int b, int c, int d)
+{
+    return ((unsigned int)a << 24) |
+           ((unsigned int)b << 16) |
+           ((unsigned int)c << 8) |
+           (unsigned int)d;
+}
+
+/* Convert unsigned integer to IP address */
+void intToIP(unsigned int ip, char *str)
+{
+    sprintf(str, "%u.%u.%u.%u",
+            (ip >> 24) & 255,
+            (ip >> 16) & 255,
+            (ip >> 8) & 255,
+            ip & 255);
+}
+
+/* Calculate subnet mask from prefix */
+unsigned int getMask(int prefix)
+{
+    if (prefix == 0)
+        return 0;
+
+    return 0xFFFFFFFF << (32 - prefix);
+}
+
+/* Convert mask to dotted decimal */
+void maskToIP(unsigned int mask, char *str)
+{
+    sprintf(str, "%u.%u.%u.%u",
+            (mask >> 24) & 255,
+            (mask >> 16) & 255,
+            (mask >> 8) & 255,
+            mask & 255);
+}
+
+/* Calculate prefix required for given hosts */
+int calculatePrefix(int hosts)
+{
+    int bits = 0;
+    int addresses = 1;
+
+    while (addresses < hosts + 2)
+    {
+        addresses = addresses * 2;
+        bits++;
+    }
+
+    return 32 - bits;
+}
+
+/* Calculate VLSM information */
+void calculateVLSM(int hosts, char *result)
+{
+    int prefix;
+    int total_addresses;
+
+    unsigned int base;
+    unsigned int mask;
+    unsigned int network;
+    unsigned int first;
+    unsigned int last;
+    unsigned int broadcast;
+
+    char networkIP[20];
+    char maskIP[20];
+    char firstIP[20];
+    char lastIP[20];
+    char broadcastIP[20];
+
+    prefix = calculatePrefix(hosts);
+
+    total_addresses = 1 << (32 - prefix);
+
+    base = ipToInt(192, 168, 1, 0);
+
+    mask = getMask(prefix);
+
+    network = base & mask;
+
+    first = network + 1;
+    last = network + total_addresses - 2;
+    broadcast = network + total_addresses - 1;
+
+    intToIP(network, networkIP);
+    maskToIP(mask, maskIP);
+    intToIP(first, firstIP);
+    intToIP(last, lastIP);
+    intToIP(broadcast, broadcastIP);
+
+    sprintf(result,
+            "Network=%s|Prefix=/%d|Mask=%s|First=%s|Last=%s|Broadcast=%s",
+            networkIP,
+            prefix,
+            maskIP,
+            firstIP,
+            lastIP,
+            broadcastIP);
+}
+
+/* Thread function */
+void *handleClient(void *arg)
+{
+    struct ClientInfo *info;
+    char response[MAX];
+
+    int hosts;
+    int prefix;
+
+    info = (struct ClientInfo *)arg;
+
+    hosts = atoi(info->message);
+
+    printf("\n----------------------------------------\n");
+    printf("Client requested : %d hosts\n", hosts);
+
+    prefix = calculatePrefix(hosts);
+
+    if (prefix < 24)
+    {
+        strcpy(response, "NO SUBNET AVAILABLE");
+
+        printf("Required subnet : /%d\n", prefix);
+        printf("No subnet available.\n");
+
+        sendto(info->sockfd,
+               response,
+               strlen(response),
+               0,
+               (struct sockaddr *)&info->client,
+               sizeof(info->client));
+
+        free(info);
+        return NULL;
+    }
+
+    calculateVLSM(hosts, response);
+
+    printf("VLSM Allocation\n");
+    printf("%s\n", response);
+
+    /* Send DHCPOFFER */
+    sendto(info->sockfd,
+           response,
+           strlen(response),
+           0,
+           (struct sockaddr *)&info->client,
+           sizeof(info->client));
+
+    /* Wait for DHCPREQUEST */
+    memset(info->message, 0, MAX);
+
+    recvfrom(info->sockfd,
+             info->message,
+             MAX - 1,
+             0,
+             NULL,
+             NULL);
+
+    info->message[MAX - 1] = '\0';
+
+    if (strcmp(info->message, "DHCPREQUEST") == 0)
+    {
+        unsigned int base;
+        unsigned int mask;
+        unsigned int network;
+        unsigned int first;
+
+        char assignedIP[20];
+
+        base = ipToInt(192, 168, 1, 0);
+
+        mask = getMask(prefix);
+
+        network = base & mask;
+
+        first = network + 1;
+
+        intToIP(first, assignedIP);
+
+        sprintf(response,
+                "DHCPACK IP=%s",
+                assignedIP);
+
+        printf("DHCPREQUEST received\n");
+        printf("Assigned IP : %s\n", assignedIP);
+
+        sendto(info->sockfd,
+               response,
+               strlen(response),
+               0,
+               (struct sockaddr *)&info->client,
+               sizeof(info->client));
+    }
+
+    free(info);
+
+    return NULL;
+}
+
+int main()
+{
+    int sockfd;
+
+    struct sockaddr_in server;
+    struct sockaddr_in client;
+
+    socklen_t client_len;
+
+    char buffer[MAX];
+
+    pthread_t thread;
+
+    int i;
+
+    /*
+       Example VLSM subnet table
+    */
+
+    struct Subnet table[3];
+
+    table[0].network = ipToInt(192, 168, 1, 0);
+    table[0].prefix = 26;
+    table[0].total_hosts = 62;
+    table[0].allocated = 0;
+
+    table[1].network = ipToInt(192, 168, 1, 64);
+    table[1].prefix = 27;
+    table[1].total_hosts = 30;
+    table[1].allocated = 0;
+
+    table[2].network = ipToInt(192, 168, 1, 96);
+    table[2].prefix = 28;
+    table[2].total_hosts = 14;
+    table[2].allocated = 0;
+
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = INADDR_ANY;
+    server.sin_port = htons(PORT);
+
+    if (bind(sockfd,
+             (struct sockaddr *)&server,
+             sizeof(server)) < 0)
+    {
+        perror("Bind failed");
+        exit(1);
+    }
+
+    printf("\n========================================\n");
+    printf(" DHCP VLSM UDP SERVER\n");
+    printf("========================================\n");
+
+    printf("\nVLSM SUBNET TABLE\n");
+    printf("-------------------------------------------------------------\n");
+    printf("Subnet\tHosts\tPrefix\tSubnet Mask\n");
+    printf("-------------------------------------------------------------\n");
+
+    for (i = 0; i < 3; i++)
+    {
+        char mask[20];
+
+        maskToIP(getMask(table[i].prefix), mask);
+
+        printf("%d\t%d\t/%d\t%s\n",
+               i + 1,
+               table[i].total_hosts,
+               table[i].prefix,
+               mask);
+    }
+
+    printf("-------------------------------------------------------------\n");
+
+    printf("\nWaiting for DHCP clients...\n");
+
+    while (1)
+    {
+        client_len = sizeof(client);
+
+        memset(buffer, 0, MAX);
+
+        recvfrom(sockfd,
+                 buffer,
+                 MAX - 1,
+                 0,
+                 (struct sockaddr *)&client,
+                 &client_len);
+
+        buffer[MAX - 1] = '\0';
+
+        if (strcmp(buffer, "DHCPDISCOVER") == 0)
+        {
+            struct ClientInfo *info;
+
+            info = malloc(sizeof(struct ClientInfo));
+
+            info->sockfd = sockfd;
+            info->client = client;
+
+            /*
+               For demonstration, request is followed
+               by the number of hosts.
+            */
+
+            strcpy(info->message, "10");
+
+            pthread_create(&thread,
+                           NULL,
+                           handleClient,
+                           info);
+
+            pthread_detach(thread);
+        }
+        else
+        {
+            /*
+               Client sends required number of hosts
+               directly after DHCPDISCOVER.
+            */
+
+            struct ClientInfo *info;
+
+            info = malloc(sizeof(struct ClientInfo));
+
+            info->sockfd = sockfd;
+            info->client = client;
+
+            strcpy(info->message, buffer);
+
+            pthread_create(&thread,
+                           NULL,
+                           handleClient,
+                           info);
+
+            pthread_detach(thread);
+        }
+    }
+
+    close(sockfd);
+
+    return 0;
+}

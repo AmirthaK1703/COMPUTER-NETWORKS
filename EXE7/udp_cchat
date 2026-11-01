@@ -1,0 +1,145 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/types.h>
+
+#define BUFFER_SIZE 1024
+
+int main(int argc, char *argv[])
+{
+    int sockfd;
+    char buffer[BUFFER_SIZE];
+
+    struct sockaddr_in server_addr;
+    socklen_t server_len;
+
+    if (argc != 3)
+    {
+        printf("Usage: %s <server_ip> <port>\n", argv[0]);
+        return 1;
+    }
+
+    // Create UDP socket
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    // Initialize server address
+    memset(&server_addr, 0, sizeof(server_addr));
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(atoi(argv[2]));
+
+    if (inet_pton(AF_INET,
+                  argv[1],
+                  &server_addr.sin_addr) <= 0)
+    {
+        perror("Invalid server IP");
+        close(sockfd);
+        return 1;
+    }
+
+    server_len = sizeof(server_addr);
+
+    printf("====================================\n");
+    printf("       UDP Chat Client\n");
+    printf("====================================\n");
+    printf("Connected to server %s:%s\n", argv[1], argv[2]);
+    printf("Type messages below.\n");
+    printf("Type 'exit' to quit.\n\n");
+
+    /*
+     * Create child process.
+     *
+     * Child -> receives messages
+     * Parent -> sends messages
+     */
+
+    pid_t pid = fork();
+
+    if (pid < 0)
+    {
+        perror("Fork failed");
+        close(sockfd);
+        return 1;
+    }
+
+    if (pid == 0)
+    {
+        // ==================================
+        // CHILD PROCESS - RECEIVE
+        // ==================================
+
+        while (1)
+        {
+            int n = recvfrom(sockfd,
+                             buffer,
+                             BUFFER_SIZE - 1,
+                             0,
+                             (struct sockaddr *)&server_addr,
+                             &server_len);
+
+            if (n < 0)
+            {
+                perror("recvfrom failed");
+                break;
+            }
+
+            buffer[n] = '\0';
+
+            printf("\nServer: %s\n", buffer);
+            printf("Client: ");
+            fflush(stdout);
+
+            if (strcmp(buffer, "exit") == 0)
+            {
+                printf("\nServer ended the chat.\n");
+                break;
+            }
+        }
+
+        close(sockfd);
+        exit(0);
+    }
+    else
+    {
+        // ==================================
+        // PARENT PROCESS - SEND
+        // ==================================
+
+        while (1)
+        {
+            printf("Client: ");
+            fflush(stdout);
+
+            if (fgets(buffer, BUFFER_SIZE, stdin) == NULL)
+                break;
+
+            buffer[strcspn(buffer, "\n")] = '\0';
+
+            // Send message to server
+            sendto(sockfd,
+                   buffer,
+                   strlen(buffer),
+                   0,
+                   (struct sockaddr *)&server_addr,
+                   server_len);
+
+            if (strcmp(buffer, "exit") == 0)
+            {
+                printf("Chat ended.\n");
+                break;
+            }
+        }
+
+        close(sockfd);
+    }
+
+    return 0;
+}

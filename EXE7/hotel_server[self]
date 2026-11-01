@@ -1,0 +1,227 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <time.h>
+#include <pthread.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8080
+#define ROOMS 10
+#define MAX_BOOKINGS 100
+#define BUF 1024
+
+typedef struct {
+    int id, room;
+    char name[50];
+    int active;
+} Booking;
+
+Booking bookings[MAX_BOOKINGS];
+int bookingCount = 0, nextId = 1;
+
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+
+void logActivity(const char *msg) {
+    FILE *fp = fopen("hotel_log.txt", "a");
+    if (fp) {
+        time_t now = time(NULL);
+        fprintf(fp, "%s | %s", msg, ctime(&now));
+        fclose(fp);
+    }
+}
+
+void sendMsg(int sock, const char *msg) {
+    send(sock, msg, strlen(msg), 0);
+}
+
+int roomAvailable(int room) {
+    for (int i = 0; i < bookingCount; i++)
+        if (bookings[i].room == room && bookings[i].active)
+            return 0;
+    return 1;
+}
+
+void processRequest(int sock, char *req) {
+    char cmd[20], name[50];
+    int room, id;
+
+    if (sscanf(req, "%19s", cmd) != 1) {
+        sendMsg(sock, "Invalid request\n");
+        return;
+    }
+
+    if (strcmp(cmd, "LIST") == 0) {
+        char response[BUF] = "Available rooms: ";
+        char temp[20];
+
+        pthread_mutex_lock(&lock);
+
+        for (int r = 1; r <= ROOMS; r++) {
+            if (roomAvailable(r)) {
+                sprintf(temp, "%d ", r);
+                strcat(response, temp);
+            }
+        }
+
+        strcat(response, "\n");
+        logActivity("Room availability checked");
+
+        pthread_mutex_unlock(&lock);
+        sendMsg(sock, response);
+    }
+
+    else if (strcmp(cmd, "BOOK") == 0) {
+        if (sscanf(req, "%*s %d %49s", &room, name) != 2 ||
+            room < 1 || room > ROOMS) {
+            sendMsg(sock, "Usage: BOOK room_number customer_name\n");
+            return;
+        }
+
+        pthread_mutex_lock(&lock);
+
+        if (!roomAvailable(room) || bookingCount >= MAX_BOOKINGS) {
+            pthread_mutex_unlock(&lock);
+            sendMsg(sock, "Booking failed: room unavailable\n");
+            return;
+        }
+
+        Booking *b = &bookings[bookingCount++];
+        b->id = nextId++;
+        b->room = room;
+        b->active = 1;
+        strcpy(b->name, name);
+
+        char response[BUF];
+        sprintf(response, "Booking successful. Booking ID: %d\n", b->id);
+
+        logActivity("Room booked");
+        pthread_mutex_unlock(&lock);
+
+        sendMsg(sock, response);
+    }
+
+    else if (strcmp(cmd, "CANCEL") == 0) {
+        if (sscanf(req, "%*s %d", &id) != 1) {
+            sendMsg(sock, "Usage: CANCEL booking_id\n");
+            return;
+        }
+
+        pthread_mutex_lock(&lock);
+
+        for (int i = 0; i < bookingCount; i++) {
+            if (bookings[i].id == id && bookings[i].active) {
+                bookings[i].active = 0;
+                logActivity("Booking cancelled");
+                pthread_mutex_unlock(&lock);
+                sendMsg(sock, "Booking cancelled successfully\n");
+                return;
+            }
+        }
+
+        pthread_mutex_unlock(&lock);
+        sendMsg(sock, "Booking not found\n");
+    }
+
+    else if (strcmp(cmd, "DETAILS") == 0) {
+        if (sscanf(req, "%*s %d", &id) != 1) {
+            sendMsg(sock, "Usage: DETAILS booking_id\n");
+            return;
+        }
+
+        pthread_mutex_lock(&lock);
+
+        for (int i = 0; i < bookingCount; i++) {
+            if (bookings[i].id == id) {
+                char response[BUF];
+
+                sprintf(response,
+                        "Booking ID: %d\nRoom: %d\nCustomer: %s\nStatus: %s\n",
+                        bookings[i].id,
+                        bookings[i].room,
+                        bookings[i].name,
+                        bookings[i].active ? "Confirmed" : "Cancelled");
+
+                pthread_mutex_unlock(&lock);
+                sendMsg(sock, response);
+                return;
+            }
+        }
+
+        pthread_mutex_unlock(&lock);
+        sendMsg(sock, "Booking not found\n");
+    }
+
+    else {
+        sendMsg(sock, "Unknown command\n");
+    }
+}
+
+void *clientHandler(void *arg) {
+    int sock = *(int *)arg;
+    free(arg);
+
+    sendMsg(sock, "Hotel Reservation Server\n"
+                  "Commands: LIST, BOOK room name, CANCEL id, "
+                  "DETAILS id, EXIT\n");
+
+    char buffer[BUF];
+    int n;
+
+    while ((n = recv(sock, buffer, sizeof(buffer) - 1, 0)) > 0) {
+        buffer[n] = '\0';
+
+        if (strncmp(buffer, "EXIT", 4) == 0)
+            break;
+
+        processRequest(sock, buffer);
+    }
+
+    close(sock);
+    return NULL;
+}
+
+int main() {
+    int server;
+    struct sockaddr_in addr;
+
+    server = socket(AF_INET, SOCK_STREAM, 0);
+    if (server < 0) {
+        perror("socket");
+        return 1;
+    }
+
+    int opt = 1;
+    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(PORT);
+    addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(server, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
+        listen(server, 10) < 0) {
+        perror("bind/listen");
+        close(server);
+        return 1;
+    }
+
+    printf("Hotel server listening on port %d\n", PORT);
+
+    while (1) {
+        int *client = malloc(sizeof(int));
+        *client = accept(server, NULL, NULL);
+
+        if (*client < 0) {
+            free(client);
+            continue;
+        }
+
+        pthread_t thread;
+        pthread_create(&thread, NULL, clientHandler, client);
+        pthread_detach(thread);
+    }
+
+    close(server);
+    return 0;
+}

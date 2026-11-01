@@ -1,0 +1,128 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8032
+#define BUFFER_SIZE 1024
+
+struct dns_record
+{
+    char domain[100];
+    char ip[50];
+};
+
+int main()
+{
+    int sockfd;
+    char buffer[BUFFER_SIZE];
+
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t client_len = sizeof(client_addr);
+
+    struct dns_record table[] =
+    {
+        {"google.com", "142.250.183.14"},
+        {"facebook.com", "157.240.241.35"},
+        {"youtube.com", "142.250.72.14"},
+        {"amazon.com", "205.251.242.103"},
+        {"example.com", "93.184.216.34"}
+    };
+
+    int nrecords = sizeof(table) / sizeof(table[0]);
+
+    // Create UDP socket
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    // Initialize server address
+    memset(&server_addr, 0, sizeof(server_addr));
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+
+    // Bind socket
+    if (bind(sockfd,
+             (struct sockaddr *)&server_addr,
+             sizeof(server_addr)) < 0)
+    {
+        perror("Bind failed");
+        close(sockfd);
+        return 1;
+    }
+
+    printf("=================================\n");
+    printf("        DNS SERVER\n");
+    printf("=================================\n");
+    printf("DNS Server running on port %d\n", PORT);
+    printf("Waiting for DNS requests...\n\n");
+
+    while (1)
+    {
+        // Receive domain name from client
+        int n = recvfrom(sockfd,
+                         buffer,
+                         BUFFER_SIZE - 1,
+                         0,
+                         (struct sockaddr *)&client_addr,
+                         &client_len);
+
+        if (n < 0)
+        {
+            perror("recvfrom failed");
+            continue;
+        }
+
+        buffer[n] = '\0';
+
+        printf("DNS Request: %s\n", buffer);
+
+        int i,found = 0;
+
+        // Search DNS table
+        for ( i = 0; i < nrecords; i++)
+        {
+            if (strcmp(buffer, table[i].domain) == 0)
+            {
+                // Send IP address
+                sendto(sockfd,
+                       table[i].ip,
+                       strlen(table[i].ip),
+                       0,
+                       (struct sockaddr *)&client_addr,
+                       client_len);
+
+                printf("IP Address: %s\n\n", table[i].ip);
+
+                found = 1;
+                break;
+            }
+        }
+
+        // Domain not found
+        if (!found)
+        {
+            char *msg = "Domain not found";
+
+            sendto(sockfd,
+                   msg,
+                   strlen(msg),
+                   0,
+                   (struct sockaddr *)&client_addr,
+                   client_len);
+
+            printf("Domain not found\n\n");
+        }
+    }
+
+    close(sockfd);
+
+    return 0;
+}

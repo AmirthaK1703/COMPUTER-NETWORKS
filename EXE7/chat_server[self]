@@ -1,0 +1,166 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <time.h>
+#include <pthread.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8081
+#define MAX_CLIENTS 100
+#define BUF 1024
+
+typedef struct {
+    int sock;
+    char name[50];
+} Client;
+
+Client clients[MAX_CLIENTS];
+int clientCount = 0;
+
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+
+void sendMsg(int sock, const char *msg) {
+    send(sock, msg, strlen(msg), 0);
+}
+
+void logActivity(const char *msg) {
+    FILE *fp = fopen("chat_log.txt", "a");
+    if (fp) {
+        time_t now = time(NULL);
+        fprintf(fp, "%s | %s", msg, ctime(&now));
+        fclose(fp);
+    }
+}
+
+void broadcast(const char *msg, int sender) {
+    pthread_mutex_lock(&lock);
+
+    for (int i = 0; i < clientCount; i++) {
+        if (clients[i].sock != sender)
+            sendMsg(clients[i].sock, msg);
+    }
+
+    pthread_mutex_unlock(&lock);
+}
+
+void removeClient(int sock) {
+    pthread_mutex_lock(&lock);
+
+    for (int i = 0; i < clientCount; i++) {
+        if (clients[i].sock == sock) {
+            clients[i] = clients[clientCount - 1];
+            clientCount--;
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&lock);
+}
+
+void *clientHandler(void *arg) {
+    int sock = *(int *)arg;
+    free(arg);
+
+    char name[50], buffer[BUF], message[BUF];
+
+    sendMsg(sock, "Enter username: ");
+
+    int n = recv(sock, name, sizeof(name) - 1, 0);
+    if (n <= 0) {
+        close(sock);
+        return NULL;
+    }
+
+    name[n] = '\0';
+    name[strcspn(name, "\r\n")] = '\0';
+
+    if (strlen(name) == 0)
+        strcpy(name, "Guest");
+
+    pthread_mutex_lock(&lock);
+
+    if (clientCount >= MAX_CLIENTS) {
+        pthread_mutex_unlock(&lock);
+        sendMsg(sock, "Server full\n");
+        close(sock);
+        return NULL;
+    }
+
+    clients[clientCount].sock = sock;
+    strcpy(clients[clientCount].name, name);
+    clientCount++;
+
+    pthread_mutex_unlock(&lock);
+
+    sprintf(message, "%s joined the chat\n", name);
+    broadcast(message, sock);
+    logActivity(message);
+
+    sendMsg(sock, "Connected! Type EXIT to leave.\n");
+
+    while ((n = recv(sock, buffer, sizeof(buffer) - 1, 0)) > 0) {
+        buffer[n] = '\0';
+
+        if (strncmp(buffer, "EXIT", 4) == 0)
+            break;
+
+        sprintf(message, "%s: %s", name, buffer);
+        broadcast(message, sock);
+        logActivity(message);
+    }
+
+    removeClient(sock);
+
+    sprintf(message, "%s left the chat\n", name);
+    broadcast(message, sock);
+    logActivity(message);
+
+    close(sock);
+    return NULL;
+}
+
+int main() {
+    int server;
+    struct sockaddr_in addr;
+
+    server = socket(AF_INET, SOCK_STREAM, 0);
+    if (server < 0) {
+        perror("socket");
+        return 1;
+    }
+
+    int opt = 1;
+    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(PORT);
+    addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(server, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
+        listen(server, 10) < 0) {
+        perror("bind/listen");
+        close(server);
+        return 1;
+    }
+
+    printf("Chat server listening on port %d\n", PORT);
+
+    while (1) {
+        int *client = malloc(sizeof(int));
+        *client = accept(server, NULL, NULL);
+
+        if (*client < 0) {
+            free(client);
+            continue;
+        }
+
+        pthread_t thread;
+        pthread_create(&thread, NULL, clientHandler, client);
+        pthread_detach(thread);
+    }
+
+    close(server);
+    return 0;
+}

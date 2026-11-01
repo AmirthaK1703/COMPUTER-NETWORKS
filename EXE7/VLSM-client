@@ -1,0 +1,166 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8080
+#define MAX 1024
+
+int main()
+{
+    int sockfd;
+
+    struct sockaddr_in server;
+
+    socklen_t server_len;
+
+    char buffer[MAX];
+
+    int hosts;
+
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    server.sin_family = AF_INET;
+    server.sin_port = htons(PORT);
+    server.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    server_len = sizeof(server);
+
+    printf("\n========================================\n");
+    printf(" DHCP VLSM CLIENT\n");
+    printf("========================================\n");
+
+    printf("\nEnter number of hosts required: ");
+    scanf("%d", &hosts);
+
+    /*
+       DHCPDISCOVER
+    */
+
+    printf("\nSending DHCPDISCOVER...\n");
+
+    sprintf(buffer, "%d", hosts);
+
+    sendto(sockfd,
+           buffer,
+           strlen(buffer),
+           0,
+           (struct sockaddr *)&server,
+           server_len);
+
+    /*
+       Receive DHCPOFFER
+    */
+
+    memset(buffer, 0, MAX);
+
+    recvfrom(sockfd,
+             buffer,
+             MAX - 1,
+             0,
+             (struct sockaddr *)&server,
+             &server_len);
+
+    buffer[MAX - 1] = '\0';
+
+    if (strcmp(buffer, "NO SUBNET AVAILABLE") == 0)
+    {
+        printf("\nServer Response: %s\n", buffer);
+
+        close(sockfd);
+
+        return 0;
+    }
+
+    printf("\n========================================\n");
+    printf(" DHCP OFFER RECEIVED\n");
+    printf("========================================\n");
+
+    /*
+       Display VLSM information
+    */
+
+    char network[20];
+    char prefix[20];
+    char mask[20];
+    char first[20];
+    char last[20];
+    char broadcast[20];
+
+    sscanf(buffer,
+           "Network=%[^|]|Prefix=%[^|]|Mask=%[^|]|First=%[^|]|Last=%[^|]|Broadcast=%s",
+           network,
+           prefix,
+           mask,
+           first,
+           last,
+           broadcast);
+
+    printf("Network Address : %s\n", network);
+    printf("Prefix : %s\n", prefix);
+    printf("Subnet Mask : %s\n", mask);
+    printf("First IP : %s\n", first);
+    printf("Last IP : %s\n", last);
+    printf("Broadcast : %s\n", broadcast);
+
+    /*
+       DHCPREQUEST
+    */
+
+    strcpy(buffer, "DHCPREQUEST");
+
+    printf("\nSending DHCPREQUEST...\n");
+
+    sendto(sockfd,
+           buffer,
+           strlen(buffer),
+           0,
+           (struct sockaddr *)&server,
+           server_len);
+
+    /*
+       Receive DHCPACK
+    */
+
+    memset(buffer, 0, MAX);
+
+    recvfrom(sockfd,
+             buffer,
+             MAX - 1,
+             0,
+             (struct sockaddr *)&server,
+             &server_len);
+
+    buffer[MAX - 1] = '\0';
+
+    printf("\n========================================\n");
+    printf(" DHCP ACK RECEIVED\n");
+    printf("========================================\n");
+
+    printf("%s\n", buffer);
+
+    if (strncmp(buffer, "DHCPACK", 7) == 0)
+    {
+        char assignedIP[20];
+
+        sscanf(buffer,
+               "DHCPACK IP=%s",
+               assignedIP);
+
+        printf("\nIP ADDRESS ASSIGNED SUCCESSFULLY\n");
+        printf("Assigned IP : %s\n", assignedIP);
+    }
+
+    close(sockfd);
+
+    return 0;
+}
+

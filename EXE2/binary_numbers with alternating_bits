@@ -1,0 +1,8 @@
+class Solution {
+public:
+    bool hasAlternatingBits(int n) {  
+        long long x = n >> 1; 
+        long long y = x ^ n; 
+        return (y & (y + 1)) == 0;
+    }
+};
